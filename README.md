@@ -1,4 +1,4 @@
-# CodeAlpha Cyber Security Internship - Task 3: Secure Coding Review
+# CodeAlpha Cyber Security Internship - Task 3 : Secure Coding Review
 
 **Aegis Code Audit** is a full-stack **Static Application Security Testing (SAST)** platform and standalone Python CLI built for automated and manual secure code reviews against OWASP Top 10 and CWE security standards.
 
