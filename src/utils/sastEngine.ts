@@ -9,6 +9,7 @@ import type {
   Severity,
 } from '../types/audit';
 import { scanFileEntropySecrets } from './secretEntropy';
+import { scanJsTsWithAst } from './jsAstAnalyzer';
 
 const SEVERITY_WEIGHTS: Record<Severity, number> = {
   critical: 24,
@@ -22,6 +23,9 @@ function isCommentOnlyLine(line: string, language: CodeFile['language']): boolea
   if (!trimmed) return true;
   if (language === 'python') {
     return trimmed.startsWith('#');
+  }
+  if (language === 'php') {
+    return trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*');
   }
   if (language === 'sql') {
     return trimmed.startsWith('--') || trimmed.startsWith('/*');
@@ -74,7 +78,18 @@ export function scanFile(
   const activeRules = rules.filter(
     (rule) => rule.enabled && rule.languages.includes(file.language)
   );
-  const findings: Finding[] = [];
+
+  // 1. Run @babel/parser AST analysis for JavaScript / TypeScript files (falls back to regex if parse fails)
+  const astResult =
+    file.language === 'typescript' || file.language === 'javascript'
+      ? scanJsTsWithAst(file, rules, overrides)
+      : { parsed: false, findings: [] };
+
+  const astCoveredKeys = new Set(
+    astResult.findings.map((f) => `${f.line}:${f.cweId}`)
+  );
+
+  const regexFindings: Finding[] = [];
   const taintedVars = new Set<string>();
 
   for (let idx = 0; idx < lines.length; idx++) {
@@ -85,17 +100,19 @@ export function scanFile(
     if (newTainted) taintedVars.add(newTainted);
 
     for (const rule of activeRules) {
+      const lineNumber = idx + 1;
+      if (astCoveredKeys.has(`${lineNumber}:${rule.cweId}`)) continue;
+
       const regex = compileRuleRegex(rule);
       if (!regex) continue;
       const match = regex.exec(rawLine);
       if (!match) continue;
 
-      const lineNumber = idx + 1;
       const column = (match.index ?? 0) + 1;
       const findingId = `${file.path}:${lineNumber}:${rule.id}`;
       const override = overrides?.[findingId];
 
-      findings.push({
+      regexFindings.push({
         id: findingId,
         ruleId: rule.id,
         ruleName: rule.name,
@@ -117,6 +134,7 @@ export function scanFile(
         taintFlow: inferTaintFlow(rawLine, rule, taintedVars),
         status: override?.status ?? 'open',
         source: 'sast',
+        engine: 'Regex',
         reviewerNotes: override?.reviewerNotes ?? '',
         ...(override?.aiPatch ? { aiPatch: override.aiPatch } : {}),
       });
@@ -124,10 +142,12 @@ export function scanFile(
   }
 
   const secretRuleLines = new Set(
-    findings.filter((f) => f.cweId === 'CWE-798').map((f) => f.line)
+    [...astResult.findings, ...regexFindings]
+      .filter((f) => f.cweId === 'CWE-798')
+      .map((f) => f.line)
   );
   const entropyFindings = scanFileEntropySecrets(file, overrides, secretRuleLines);
-  const merged = [...findings, ...entropyFindings];
+  const merged = [...astResult.findings, ...regexFindings, ...entropyFindings];
 
   return merged.sort((a, b) => b.cvssScore - a.cvssScore || a.line - b.line);
 }
@@ -139,6 +159,31 @@ export function scanTarget(
 ): Finding[] {
   const allFindings = target.files.flatMap((file) => scanFile(file, rules, overrides));
   return allFindings.sort((a, b) => b.cvssScore - a.cvssScore || a.filePath.localeCompare(b.filePath));
+}
+
+export function mergeAstFindings(
+  baseFindings: Finding[],
+  astFindings: Finding[],
+  overrides?: Record<string, { status: FindingStatus; reviewerNotes: string; aiPatch?: Finding['aiPatch'] }>
+): Finding[] {
+  if (astFindings.length === 0) return baseFindings;
+  const astKeys = new Set(astFindings.map((f) => `${f.filePath}:${f.line}:${f.cweId}`));
+  const filteredBase = baseFindings.filter(
+    (f) => f.engine === 'AST' || !astKeys.has(`${f.filePath}:${f.line}:${f.cweId}`)
+  );
+  const hydratedAst = astFindings.map((f) => {
+    const ov = overrides?.[f.id];
+    if (!ov) return f;
+    return {
+      ...f,
+      status: ov.status,
+      reviewerNotes: ov.reviewerNotes,
+      ...(ov.aiPatch ? { aiPatch: ov.aiPatch } : {}),
+    };
+  });
+  return [...hydratedAst, ...filteredBase].sort(
+    (a, b) => b.cvssScore - a.cvssScore || a.filePath.localeCompare(b.filePath) || a.line - b.line
+  );
 }
 
 export function computeSecurityMetrics(findings: Finding[]): AuditMetrics {
@@ -279,6 +324,7 @@ export function generateMarkdownReport(
     lines.push(`### ${idx + 1}. [${f.severity.toUpperCase()}] ${f.ruleName} (${f.cweId})`);
     lines.push('');
     lines.push(`- **Location:** \`${f.filePath}:${f.line}\``);
+    lines.push(`- **Analysis Engine:** ${f.engine}`);
     lines.push(`- **Status:** ${f.status}`);
     lines.push(`- **CVSS 3.1 Score:** ${f.cvssScore.toFixed(1)}`);
     lines.push(`- **OWASP Category:** ${f.owaspCategory}`);
@@ -370,6 +416,7 @@ export function generateSarifReport(target: AuditTarget, findings: Finding[]): R
             ],
             properties: {
               status: f.status,
+              engine: f.engine,
               taintFlow: f.taintFlow,
             },
           })),

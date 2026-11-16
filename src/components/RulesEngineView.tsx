@@ -9,7 +9,7 @@ interface RulesEngineViewProps {
   onDeleteCustomRule: (ruleId: string) => void;
 }
 
-const ALL_LANGUAGES: Language[] = ['python', 'typescript', 'javascript', 'go', 'sql'];
+const ALL_LANGUAGES: Language[] = ['python', 'typescript', 'javascript', 'php', 'go', 'sql'];
 
 export const RulesEngineView: React.FC<RulesEngineViewProps> = ({
   rules,

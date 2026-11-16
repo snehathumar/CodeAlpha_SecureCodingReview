@@ -10,6 +10,7 @@ const ALLOWED_EXTENSIONS = new Map<string, Language>([
   ['.jsx', 'javascript'],
   ['.go', 'go'],
   ['.sql', 'sql'],
+  ['.php', 'php'],
 ]);
 
 const SKIP_DIRS = new Set([
@@ -23,6 +24,7 @@ const SKIP_DIRS = new Set([
   'venv',
   '.playwright-cli',
   'data',
+  'samples',
 ]);
 
 export function inferFileLanguage(filePath: string): Language | null {
@@ -111,7 +113,7 @@ export async function importGithubRepository(rawInput: string): Promise<AuditTar
       .slice(0, 20);
 
     if (candidates.length === 0) {
-      throw new Error(`No supported source or manifest files (.py, .ts, .js, .go, .sql, package.json, requirements.txt, go.mod) found in ${owner}/${repo}.`);
+      throw new Error(`No supported source or manifest files (.py, .ts, .js, .go, .sql, .php, package.json, requirements.txt, go.mod) found in ${owner}/${repo}.`);
     }
 
     const files: CodeFile[] = [];

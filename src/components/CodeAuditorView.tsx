@@ -58,6 +58,7 @@ interface CodeAuditorViewProps {
   onRunDeepReview: () => Promise<void>;
   runningDeepReview: boolean;
   activeRuleCount: number;
+  astFallbackNotice?: string | null;
 }
 
 const SEVERITY_TEXT_CLASS: Record<Finding['severity'], string> = {
@@ -100,6 +101,7 @@ function inferLanguageFromFilename(name: string): Language | null {
   if (lower.endsWith('.py')) return 'python';
   if (lower.endsWith('.go')) return 'go';
   if (lower.endsWith('.sql')) return 'sql';
+  if (lower.endsWith('.php')) return 'php';
   if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
   if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
   return null;
@@ -134,6 +136,7 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
   onRunDeepReview,
   runningDeepReview,
   activeRuleCount,
+  astFallbackNotice,
 }) => {
   const [severityFilter, setSeverityFilter] = useState<'all' | 'critical' | 'high' | 'medium' | 'remediated'>('all');
   const [queueTab, setQueueTab] = useState<'code' | 'dependencies'>('code');
@@ -349,6 +352,16 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
         </div>
       </section>
 
+      {/* Optional Python AST Fallback Notice */}
+      {astFallbackNotice && (
+        <div
+          role="status"
+          className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-xs text-amber-900"
+        >
+          {astFallbackNotice}
+        </div>
+      )}
+
       {/* 4-column Summary Metrics Strip */}
       <section
         aria-label="Security posture metrics"
@@ -462,6 +475,7 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
               <option value="python">Python</option>
               <option value="typescript">TypeScript</option>
               <option value="javascript">JavaScript</option>
+              <option value="php">PHP</option>
               <option value="go">Go</option>
               <option value="sql">SQL</option>
               <option value="json">JSON</option>
@@ -487,7 +501,7 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
             <span>Upload File</span>
             <input
               type="file"
-              accept=".py,.ts,.tsx,.js,.jsx,.go,.sql,.json,.txt,.mod"
+              accept=".py,.ts,.tsx,.js,.jsx,.php,.go,.sql,.json,.txt,.mod"
               onChange={handleFileInput}
               className="sr-only"
             />
@@ -721,6 +735,10 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
                               <span aria-hidden="true">·</span>
                               <span>CVSS {finding.cvssScore.toFixed(1)}</span>
                               <span aria-hidden="true">·</span>
+                              <span className={finding.engine === 'AST' ? 'text-blue-700 font-semibold' : 'text-slate-600'}>
+                                {finding.engine}
+                              </span>
+                              <span aria-hidden="true">·</span>
                               <span className="truncate">
                                 {finding.filePath}:{finding.line}
                               </span>
@@ -820,6 +838,10 @@ export const CodeAuditorView: React.FC<CodeAuditorViewProps> = ({
                   <span>CVSS {selectedFinding.cvssScore.toFixed(1)}</span>
                   <span aria-hidden="true">·</span>
                   <span>{selectedFinding.ruleId}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className={selectedFinding.engine === 'AST' ? 'text-blue-700 font-semibold' : 'text-slate-700'}>
+                    Engine: {selectedFinding.engine}
+                  </span>
                 </div>
                 <h2 className="mt-1.5 font-display text-lg font-semibold text-slate-900">
                   {selectedFinding.ruleName}

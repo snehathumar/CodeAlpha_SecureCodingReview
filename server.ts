@@ -8,6 +8,7 @@ import {
   runDeepSecurityReview,
 } from './src/server/geminiService.ts';
 import { scanDependenciesWithOsv } from './src/server/osvService.ts';
+import { runPythonAstAuditOnFiles } from './src/server/astBridge.ts';
 import {
   importGithubRepository,
   loadLocalWorkspaceProject,
@@ -192,8 +193,11 @@ app.post('/api/audit/github', async (req, res) => {
     }
 
     const target = await importGithubRepository(repoUrl);
-    const depScan = await scanDependenciesWithOsv(target.files);
-    res.json({ target, depScan });
+    const [depScan, astScan] = await Promise.all([
+      scanDependenciesWithOsv(target.files),
+      runPythonAstAuditOnFiles(target.files),
+    ]);
+    res.json({ target, depScan, astScan });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'GitHub repository import failed.';
     res.status(400).json({ error: message });
@@ -203,10 +207,28 @@ app.post('/api/audit/github', async (req, res) => {
 app.post('/api/audit/workspace', async (_req, res) => {
   try {
     const target = await loadLocalWorkspaceProject(__dirname);
-    const depScan = await scanDependenciesWithOsv(target.files);
-    res.json({ target, depScan });
+    const [depScan, astScan] = await Promise.all([
+      scanDependenciesWithOsv(target.files),
+      runPythonAstAuditOnFiles(target.files),
+    ]);
+    res.json({ target, depScan, astScan });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to scan local workspace.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/audit/ast', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const files = Array.isArray(body.files) ? (body.files as CodeFile[]) : [];
+    const disabledRuleIds = Array.isArray(body.disabledRuleIds)
+      ? body.disabledRuleIds.filter((id: unknown): id is string => typeof id === 'string')
+      : [];
+    const astScan = await runPythonAstAuditOnFiles(files, disabledRuleIds);
+    res.json(astScan);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Python AST analysis failed.';
     res.status(500).json({ error: message });
   }
 });

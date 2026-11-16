@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import {
   applyLinePatch,
   computeSecurityMetrics,
@@ -12,7 +14,9 @@ import {
 import { DEFAULT_SAST_RULES } from './sastRules';
 import { calculateShannonEntropy, scanFileEntropySecrets } from './secretEntropy';
 import { extractDependenciesFromFiles } from './manifestParser';
+import { scanJsTsWithAst } from './jsAstAnalyzer';
 import { parseGithubRepoSlug } from '../server/projectImporter';
+import { runPythonAstAuditOnFiles } from '../server/astBridge';
 import type { AuditTarget, SastRule } from '../types/audit';
 
 const PYTHON_TEST_TARGET: AuditTarget = {
@@ -287,4 +291,77 @@ test('extracts npm, PyPI, and Go dependencies from manifests and parses GitHub s
     repo: 'express',
   });
   assert.equal(parseGithubRepoSlug('https://evil.example.com/a/b'), null);
+});
+
+test('uses @babel/parser AST taint tracking for JS/TS and falls back to Regex on invalid syntax', () => {
+  const astCode = [
+    'function handleOrder(req, res, db, child_process, el) {',
+    '  const userId = req.query.id;',
+    '  const sql = "SELECT * FROM orders WHERE user = " + userId;',
+    '  db.query(sql);',
+    '  child_process.exec("ping -c 1 " + userId);',
+    '  const fn = new Function("return " + userId);',
+    '  el.innerHTML = userId;',
+    '  res.send(fn());',
+    '}',
+  ].join('\n');
+
+  const astResult = scanJsTsWithAst(
+    { path: 'orders.ts', language: 'typescript', content: astCode },
+    DEFAULT_SAST_RULES
+  );
+  assert.equal(astResult.parsed, true);
+  const astCwes = new Set(astResult.findings.map((f) => f.cweId));
+  assert.ok(astCwes.has('CWE-89'), 'AST must detect tainted SQL variable');
+  assert.ok(astCwes.has('CWE-78'), 'AST must detect child_process.exec');
+  assert.ok(astCwes.has('CWE-95'), 'AST must detect new Function');
+  assert.ok(astCwes.has('CWE-79'), 'AST must detect innerHTML');
+  assert.ok(astResult.findings.every((f) => f.engine === 'AST'));
+
+  const brokenTs = 'const bad = (; eval(req.query.cmd);\n';
+  const fallbackFindings = scanFile(
+    { path: 'broken.ts', language: 'typescript', content: brokenTs },
+    DEFAULT_SAST_RULES
+  );
+  assert.ok(fallbackFindings.some((f) => f.cweId === 'CWE-95' && f.engine === 'Regex'));
+});
+
+test('scans PHP code for SQL concatenation, shell execution, eval, hardcoded secrets, and include path traversal', () => {
+  const phpCode = [
+    '<?php',
+    '$db_password = "php-hardcoded-password-9911";',
+    '$res = mysqli_query($conn, "SELECT * FROM users WHERE id = " . $_GET["id"]);',
+    '$out = shell_exec("ping -c 1 " . $_GET["host"]);',
+    'eval($_POST["expr"]);',
+    'include($_GET["page"] . ".php");',
+  ].join('\n');
+
+  const findings = scanFile({ path: 'index.php', language: 'php', content: phpCode }, DEFAULT_SAST_RULES);
+  const cwes = new Set(findings.map((f) => f.cweId));
+
+  assert.ok(cwes.has('CWE-798'), 'Must detect PHP hardcoded secret');
+  assert.ok(cwes.has('CWE-89'), 'Must detect PHP SQL concatenation');
+  assert.ok(cwes.has('CWE-78'), 'Must detect PHP shell_exec');
+  assert.ok(cwes.has('CWE-95'), 'Must detect PHP eval');
+  assert.ok(cwes.has('CWE-22'), 'Must detect PHP include path traversal');
+});
+
+test('detects all 5 vulnerabilities in samples/vulnerable_app.py using the Python AST auditor', async () => {
+  const samplePath = path.resolve(process.cwd(), 'samples/vulnerable_app.py');
+  const content = await fs.readFile(samplePath, 'utf8');
+
+  const astScan = await runPythonAstAuditOnFiles([
+    { path: 'samples/vulnerable_app.py', language: 'python', content },
+  ]);
+
+  assert.equal(astScan.pythonAstAvailable, true, 'python3 must be available for AST audit test');
+  assert.equal(astScan.findings.length, 5, 'samples/vulnerable_app.py must trigger all 5 bugs');
+
+  const cwes = new Set(astScan.findings.map((f) => f.cweId));
+  assert.ok(cwes.has('CWE-798'), 'Must detect hardcoded DB_PASSWORD (CWE-798)');
+  assert.ok(cwes.has('CWE-89'), 'Must detect SQL injection via string concat (CWE-89)');
+  assert.ok(cwes.has('CWE-78'), 'Must detect os.system command injection (CWE-78)');
+  assert.ok(cwes.has('CWE-328'), 'Must detect hashlib.md5 weak hash (CWE-328)');
+  assert.ok(cwes.has('CWE-95'), 'Must detect eval(input()) (CWE-95)');
+  assert.ok(astScan.findings.every((f) => f.engine === 'AST'));
 });

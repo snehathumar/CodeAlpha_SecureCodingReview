@@ -4,6 +4,7 @@ import { DEFAULT_SAST_RULES } from './utils/sastRules';
 import {
   applyLinePatch,
   computeSecurityMetrics,
+  mergeAstFindings,
   scanTarget,
   stripUndefined,
 } from './utils/sastEngine';
@@ -68,6 +69,10 @@ export default function App() {
   const [dependencyStatusByTarget, setDependencyStatusByTarget] = useState<
     Record<string, string>
   >({});
+  const [pythonAstFindingsByTarget, setPythonAstFindingsByTarget] = useState<
+    Record<string, Finding[]>
+  >({});
+  const [astFallbackNotice, setAstFallbackNotice] = useState<string | null>(null);
   const [scanPulseCount, setScanPulseCount] = useState(0);
 
   const [persistError, setPersistError] = useState<string | null>(null);
@@ -246,8 +251,51 @@ export default function App() {
     [targets, selectedTargetId]
   );
 
+  // Trigger server-side Python AST analysis whenever the current target contains Python source files
+  useEffect(() => {
+    const hasPython = currentTarget.files.some((f) => f.language === 'python');
+    if (!hasPython) {
+      setAstFallbackNotice(null);
+      return;
+    }
+
+    let cancelled = false;
+    async function runPyAst() {
+      try {
+        const res = await fetch('/api/audit/ast', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: currentTarget.files.filter((f) => f.language === 'python'),
+            disabledRuleIds,
+          }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          pythonAstAvailable: boolean;
+          fallbackNotice: string | null;
+          findings: Finding[];
+        };
+        if (cancelled) return;
+        setAstFallbackNotice(data.pythonAstAvailable ? null : data.fallbackNotice);
+        setPythonAstFindingsByTarget((prev) => ({
+          ...prev,
+          [currentTarget.id]: data.findings,
+        }));
+      } catch {
+        // Non-blocking fallback to regex rules
+      }
+    }
+    void runPyAst();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTarget, disabledRuleIds, scanPulseCount]);
+
   const findings = useMemo(() => {
-    const liveFindings = scanTarget(currentTarget, allRules, findingOverrides);
+    const baseFindings = scanTarget(currentTarget, allRules, findingOverrides);
+    const pyAstFindings = pythonAstFindingsByTarget[currentTarget.id] ?? [];
+    const liveFindings = mergeAstFindings(baseFindings, pyAstFindings, findingOverrides);
     const liveIds = new Set(liveFindings.map((f) => f.id));
     const archivedForTarget = Object.values(remediatedArchive).filter(
       (archived) =>
@@ -255,7 +303,14 @@ export default function App() {
         currentTarget.files.some((f) => f.path === archived.filePath)
     );
     return [...liveFindings, ...archivedForTarget];
-  }, [currentTarget, allRules, findingOverrides, remediatedArchive, scanPulseCount]);
+  }, [
+    currentTarget,
+    allRules,
+    findingOverrides,
+    pythonAstFindingsByTarget,
+    remediatedArchive,
+    scanPulseCount,
+  ]);
 
   const metrics = useMemo(() => computeSecurityMetrics(findings), [findings]);
 
@@ -861,6 +916,7 @@ export default function App() {
               onRunDeepReview={handleRunDeepReview}
               runningDeepReview={runningDeepReview}
               activeRuleCount={allRules.filter((r) => r.enabled).length}
+              astFallbackNotice={astFallbackNotice}
             />
           )}
 

@@ -75,6 +75,7 @@ export function scanFileEntropySecrets(
         taintFlow: 'Hardcoded Private Key Block -> Repository Exposure (CWE-798)',
         status: override?.status ?? 'open',
         source: 'entropy',
+        engine: 'Regex',
         reviewerNotes: override?.reviewerNotes ?? '',
         ...(override?.aiPatch ? { aiPatch: override.aiPatch } : {}),
       });
@@ -118,6 +119,7 @@ export function scanFileEntropySecrets(
           taintFlow: `High-Entropy Literal (${entropy.toFixed(2)} bits/char) -> Static Secret Exposure (CWE-798)`,
           status: override?.status ?? 'open',
           source: 'entropy',
+          engine: 'Regex',
           reviewerNotes: override?.reviewerNotes ?? '',
           ...(override?.aiPatch ? { aiPatch: override.aiPatch } : {}),
         });

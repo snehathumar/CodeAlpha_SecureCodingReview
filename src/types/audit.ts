@@ -1,4 +1,4 @@
-export type Language = 'python' | 'typescript' | 'javascript' | 'go' | 'sql' | 'json' | 'text';
+export type Language = 'python' | 'typescript' | 'javascript' | 'go' | 'sql' | 'php' | 'json' | 'text';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -64,6 +64,7 @@ export interface Finding {
   taintFlow: string;
   status: FindingStatus;
   source: 'sast' | 'ai-semantic' | 'entropy';
+  engine: 'AST' | 'Regex';
   reviewerNotes: string;
   aiPatch?: {
     patchedSnippet: string;
