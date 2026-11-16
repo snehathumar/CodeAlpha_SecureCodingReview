@@ -1,0 +1,6 @@
+{
+  "name": "Aegis Code Audit",
+  "description": "Secure coding review workbench with deterministic multi-language SAST scanning, OWASP Top 10 inspection, automated patch remediation, and SARIF audit reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
